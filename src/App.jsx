@@ -87,14 +87,18 @@ function calcFatGoal({ weight, fatPct, targetFatPct, dailyDeficit }) {
       fatKg, lbm:w-fatKg, fatPerPct:fatKg/f,
       needFatLoss:null, totalDeficit:null, days:null, weeks:null };
   }
-  const fatKg       = w*(f/100);
-  const lbm         = w-fatKg;
-  const fatPerPct   = fatKg/f;
-  const needFatLoss = (f-tf)*fatPerPct;
-  const totalDeficit= needFatLoss*7200;
-  const days        = (dd&&dd>0) ? totalDeficit/dd : null;
-  const weeks2      = days!=null ? days/7 : null;
-  return { errors:[], partial:false, fatKg, lbm, fatPerPct, needFatLoss, totalDeficit, days, weeks:weeks2 };
+  const fatKg        = w*(f/100);
+  const lbm          = w-fatKg;
+  const fatPerPct    = fatKg/f;
+  const needFatLoss  = (f-tf)*fatPerPct;
+  const totalDeficit = needFatLoss*7200;
+  const days         = (dd&&dd>0) ? totalDeficit/dd : null;
+  const weeks2       = days!=null ? days/7 : null;
+  // 目標体重 = 除脂肪体重 ÷ (1 - 目標体脂肪率/100)
+  const goalWeight   = lbm / (1 - tf/100);
+  // 目標までの-kg = 現在体重 - 目標体重
+  const diffKg       = w - goalWeight;
+  return { errors:[], partial:false, fatKg, lbm, fatPerPct, needFatLoss, totalDeficit, days, weeks:weeks2, goalWeight, diffKg };
 }
 
 // ─── 日付ユーティリティ ──────────────────────────
@@ -752,21 +756,34 @@ export default function DietTracker() {
               </div>
             </div>
 
-            {/* 基本計算結果（既存維持） */}
+            {/* 基本計算結果（4枚：除脂肪体重・体脂肪量・目標体重・目標までの-kg） */}
             <div style={cardSt()}>
               <div style={{fontSize:14,fontWeight:700,color:C.teal,marginBottom:14}}>📊 基本計算結果</div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                {[
-                  {lbl:"BMI",          val:fmt1(calc.bmi),        unit:"",   color:C.teal},
-                  {lbl:"除脂肪体重",    val:fmt1(calc.lbm),        unit:"kg", color:C.green},
-                  {lbl:"体脂肪量",      val:fmt1(calc.fatKg),      unit:"kg", color:C.red},
-                  {lbl:"目標体重(85%)", val:fmt1(calc.goalWeight),  unit:"kg", color:C.purple},
-                ].map(({lbl,val,unit,color})=>(
-                  <div key={lbl} style={{background:"rgba(255,255,255,0.05)",borderRadius:12,padding:12,border:`1px solid ${color}33`}}>
-                    <div style={{fontSize:11,color:C.muted,marginBottom:4}}>{lbl}</div>
-                    <div style={{fontSize:20,fontWeight:800,color}}>{val}<span style={{fontSize:11,color:C.muted,marginLeft:3}}>{unit}</span></div>
+                <div style={{background:"rgba(255,255,255,0.05)",borderRadius:12,padding:12,border:`1px solid ${C.green}33`}}>
+                  <div style={{fontSize:11,color:C.muted,marginBottom:4}}>除脂肪体重</div>
+                  <div style={{fontSize:20,fontWeight:800,color:C.green}}>{fmt1(calc.lbm)}<span style={{fontSize:11,color:C.muted,marginLeft:3}}>kg</span></div>
+                </div>
+                <div style={{background:"rgba(255,255,255,0.05)",borderRadius:12,padding:12,border:`1px solid ${C.red}33`}}>
+                  <div style={{fontSize:11,color:C.muted,marginBottom:4}}>体脂肪量</div>
+                  <div style={{fontSize:20,fontWeight:800,color:C.red}}>{fmt1(calc.fatKg)}<span style={{fontSize:11,color:C.muted,marginLeft:3}}>kg</span></div>
+                </div>
+                <div style={{background:"rgba(255,255,255,0.05)",borderRadius:12,padding:12,border:`1px solid ${C.purple}33`}}>
+                  <div style={{fontSize:11,color:C.muted,marginBottom:4}}>目標体重</div>
+                  <div style={{fontSize:20,fontWeight:800,color:C.purple}}>
+                    {fatGoalCalc.goalWeight!=null ? fmt1(fatGoalCalc.goalWeight) : "—"}
+                    <span style={{fontSize:11,color:C.muted,marginLeft:3}}>kg</span>
                   </div>
-                ))}
+                  {fatGoalCalc.goalWeight==null&&<div style={{fontSize:9,color:C.dim,marginTop:4}}>目標体脂肪率を入力すると計算</div>}
+                </div>
+                <div style={{background:"rgba(255,255,255,0.05)",borderRadius:12,padding:12,border:`1px solid ${C.gold}33`}}>
+                  <div style={{fontSize:11,color:C.muted,marginBottom:4}}>目標までの-kg</div>
+                  <div style={{fontSize:20,fontWeight:800,color:C.gold}}>
+                    {fatGoalCalc.diffKg!=null ? fmt1(fatGoalCalc.diffKg) : "—"}
+                    <span style={{fontSize:11,color:C.muted,marginLeft:3}}>kg</span>
+                  </div>
+                  {fatGoalCalc.diffKg==null&&<div style={{fontSize:9,color:C.dim,marginTop:4}}>目標体脂肪率を入力すると計算</div>}
+                </div>
               </div>
             </div>
 
