@@ -13,10 +13,11 @@ import {
 //  shibolog_v3_goal     : 目標設定（タイプ/数値/見た目/日程/画像）
 // ══════════════════════════════════════════════════
 const KEYS = {
-  profile : "shibolog_v3_profile",
-  fatgoal : "shibolog_v3_fatgoal",
-  weeks   : "shibolog_v3_weeks",
-  goal    : "shibolog_v3_goal",
+  profile   : "shibolog_v3_profile",
+  fatgoal   : "shibolog_v3_fatgoal",
+  weeks     : "shibolog_v3_weeks",
+  goal      : "shibolog_v3_goal",
+  bodyPhoto : "shibolog_v3_bodyPhoto",
 };
 
 // ─── localStorage ラッパー（失敗しても落ちない）─────
@@ -197,20 +198,29 @@ export default function DietTracker() {
   const [weeks, setWeeks] = useState(() => {
     const saved = lsGet(KEYS.weeks, null);
     if (saved && Array.isArray(saved) && saved.length > 0) {
-      // 古いデータに mondayFull がなければ補完する
+      const currentYear = new Date().getFullYear();
+      // 古いデータに mondayFull がなければ補完する（年またぎ対応）
       const patched = saved.map(w => {
         if (w.mondayFull) return w;
-        // weekLabel "4/21〜4/27" から月初日を取り出して補完
         try {
           const [mStr, dStr] = w.weekLabel.split("〜")[0].split("/");
-          const year = new Date().getFullYear();
-          const mon  = getMonday(new Date(year, parseInt(mStr)-1, parseInt(dStr)));
+          const m = parseInt(mStr)-1;
+          // 月が現在より大きければ前年のデータと判断
+          const year = m > new Date().getMonth() ? currentYear - 1 : currentYear;
+          const mon  = getMonday(new Date(year, m, parseInt(dStr)));
           return { ...w, mondayFull: makeFullKey(mon) };
-        } catch { return { ...w, mondayFull: "2024-1-1" }; }
+        } catch { return { ...w, mondayFull: `${currentYear}-1-1` }; }
+      });
+      // 重複weekLabelを除去（保険）
+      const seen = new Set();
+      const deduped = patched.filter(w => {
+        if (seen.has(w.weekLabel)) return false;
+        seen.add(w.weekLabel);
+        return true;
       });
       // 今週があるか確認し、なければ追加
-      const today  = new Date();
-      const patched2 = ensureWeek(patched, today);
+      const today    = new Date();
+      const patched2 = ensureWeek(deduped, today);
       return sortWeeks(patched2);
     }
     return buildInitialWeeks();
@@ -242,21 +252,23 @@ export default function DietTracker() {
   }
 
   // ── 確実な自動保存（useEffect + 直接保存の2段構え）
-  useEffect(() => { showSaved(lsSet(KEYS.profile, profile)); }, [profile]);
-  useEffect(() => { showSaved(lsSet(KEYS.weeks,   weeks));   }, [weeks]);
-  useEffect(() => { showSaved(lsSet(KEYS.goal,    goal));    }, [goal]);
-  useEffect(() => { showSaved(lsSet(KEYS.fatgoal, fatGoalInput)); }, [fatGoalInput]);
-
   // ── その他state ──────────────────────────────────
   const [mealForm, setMealForm]   = useState({ time:"", name:"", kcal:"", protein:"", fat:"", carb:"", photo:null });
   const [praiseMsg, setPraiseMsg] = useState("");
-  const [bodyPhoto, setBodyPhoto] = useState(null);
+  const [bodyPhoto, setBodyPhoto] = useState(() => lsGet(KEYS.bodyPhoto, null));
   const bodyPhotoRef = useRef();
   const goalPhotoRef = useRef();
   const photoRef     = useRef();
   const [remindMorning, setRemindMorning] = useState("07:00");
   const [remindNight,   setRemindNight]   = useState("21:00");
   const [remindStatus,  setRemindStatus]  = useState("");
+
+  // ── 確実な自動保存（useEffect + 直接保存の2段構え）
+  useEffect(() => { showSaved(lsSet(KEYS.profile,   profile));       }, [profile]);
+  useEffect(() => { showSaved(lsSet(KEYS.weeks,     weeks));         }, [weeks]);
+  useEffect(() => { showSaved(lsSet(KEYS.goal,      goal));          }, [goal]);
+  useEffect(() => { showSaved(lsSet(KEYS.fatgoal,   fatGoalInput));  }, [fatGoalInput]);
+  useEffect(() => { lsSet(KEYS.bodyPhoto, bodyPhoto);                }, [bodyPhoto]);
 
   const calc        = useMemo(() => calcProfile(profile), [profile]);
   const fatGoalCalc = useMemo(() => calcFatGoal({
@@ -300,20 +312,35 @@ export default function DietTracker() {
     setTimeout(()=>setPraiseMsg(""),4000);
   }
 
-  // updateDay: weeksを更新してlocalStorageにも即書き込む（2段保存）
+  // updateDay: weekLabel + fullKey で特定（index依存を完全排除）
+  // wi = weekLabel文字列 または 後方互換のためのindex番号
+  // di = fullKey文字列 または dayIndex番号
   const updateDay = useCallback((wi, di, patch) => {
     setWeeks(ws => {
-      const next = ws.map((w,i) => i!==wi ? w : {
-        ...w, days: w.days.map((d,j) => j!==di ? d : {...d,...patch})
+      const next = ws.map((w, i) => {
+        const wMatch = typeof wi === "string" ? w.weekLabel === wi : i === wi;
+        if (!wMatch) return w;
+        return {
+          ...w,
+          days: w.days.map((d, j) => {
+            const dMatch = typeof di === "string"
+              ? (d.fullKey === di || d.date === di)
+              : j === di;
+            return dMatch ? { ...d, ...patch } : d;
+          })
+        };
       });
-      lsSet(KEYS.weeks, next); // useEffect に加えて即座にも保存
+      lsSet(KEYS.weeks, next);
       return next;
     });
   }, []);
 
   const updateWeek = useCallback((wi, patch) => {
     setWeeks(ws => {
-      const next = ws.map((w,i) => i!==wi ? w : {...w,...patch});
+      const next = ws.map((w, i) => {
+        const wMatch = typeof wi === "string" ? w.weekLabel === wi : i === wi;
+        return wMatch ? { ...w, ...patch } : w;
+      });
       lsSet(KEYS.weeks, next);
       return next;
     });
@@ -333,13 +360,13 @@ export default function DietTracker() {
     const meal  = {...mealForm, id:Date.now()};
     const meals = [...(currentDay.meals||[]), meal];
     const cal   = Math.round(meals.reduce((s,m)=>s+(parseFloat(m.kcal)||0),0));
-    updateDay(selWeek, selDay, {meals, cal});
+    updateDay(selWeekLabel, currentDay?.fullKey||selDay, {meals, cal});
     setMealForm({time:"",name:"",kcal:"",protein:"",fat:"",carb:"",photo:null});
     showPraise("meal");
   }
   function removeMeal(id) {
     const meals = (currentDay.meals||[]).filter(m=>m.id!==id);
-    updateDay(selWeek, selDay, {meals, cal:Math.round(meals.reduce((s,m)=>s+(parseFloat(m.kcal)||0),0))});
+    updateDay(selWeekLabel, currentDay?.fullKey||selDay, {meals, cal:Math.round(meals.reduce((s,m)=>s+(parseFloat(m.kcal)||0),0))});
   }
   function handlePhoto(e) {
     const f=e.target.files?.[0]; if(!f) return;
@@ -477,7 +504,14 @@ export default function DietTracker() {
 
             {/* 体重グラフ */}
             <div style={cardSt()}>
-              <div style={{fontSize:13,fontWeight:700,color:C.yellow,marginBottom:10}}>⚖️ 体重推移</div>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+                <div style={{fontSize:13,fontWeight:700,color:C.yellow}}>⚖️ 体重推移</div>
+                {fatGoalCalc.diffKg!=null&&(
+                  <div style={{fontSize:12,fontWeight:700,color:C.gold,background:"rgba(201,168,76,0.12)",border:`1px solid ${C.gold}44`,borderRadius:999,padding:"3px 10px"}}>
+                    目標まで −{fmt1(fatGoalCalc.diffKg)}kg
+                  </div>
+                )}
+              </div>
               <ResponsiveContainer width="100%" height={200}>
                 <LineChart data={chartData} margin={{left:-15,right:8}}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)"/>
@@ -544,12 +578,12 @@ export default function DietTracker() {
                 <div>
                   <div style={{fontSize:11,color:C.yellow,marginBottom:5}}>🌅 朝の体重 (kg)</div>
                   <input type="number" step="0.1" placeholder="例: 48.5" value={currentDay?.morning??""} style={inpSt(`${C.yellow}55`)}
-                    onChange={e=>{updateDay(selWeek,selDay,{morning:e.target.value?parseFloat(e.target.value):null});if(e.target.value)showPraise("morning");}}/>
+                    onChange={e=>{updateDay(selWeekLabel,currentDay?.fullKey||selDay,{morning:e.target.value?parseFloat(e.target.value):null});if(e.target.value)showPraise("morning");}}/>
                 </div>
                 <div>
                   <div style={{fontSize:11,color:C.purple,marginBottom:5}}>🌙 夜の体重 (kg)</div>
                   <input type="number" step="0.1" placeholder="例: 49.0" value={currentDay?.night??""} style={inpSt(`${C.purple}55`)}
-                    onChange={e=>{updateDay(selWeek,selDay,{night:e.target.value?parseFloat(e.target.value):null});if(e.target.value)showPraise("night");}}/>
+                    onChange={e=>{updateDay(selWeekLabel,currentDay?.fullKey||selDay,{night:e.target.value?parseFloat(e.target.value):null});if(e.target.value)showPraise("night");}}/>
                 </div>
               </div>
             </div>
@@ -625,7 +659,7 @@ export default function DietTracker() {
             <div style={cardSt()}>
               <div style={{fontSize:12,color:C.muted,marginBottom:6}}>💬 本日のメモ</div>
               <textarea value={currentDay?.note??""} placeholder="体調・気づきなど..."
-                onChange={e=>updateDay(selWeek,selDay,{note:e.target.value})}
+                onChange={e=>updateDay(selWeekLabel,currentDay?.fullKey||selDay,{note:e.target.value})}
                 style={{...inpSt(),height:70,resize:"none"}}/>
             </div>
           </div>
@@ -633,7 +667,7 @@ export default function DietTracker() {
 
         {/* ══ トレーニング ══ */}
         {tab==="トレーニング"&&(
-          <TrainingTab weeks={weeks} currentWeek={currentWeek} currentDay={currentDay} selWeek={selWeek} selDay={selDay} updateDay={updateDay} showPraise={showPraise} C={C} cardSt={cardSt} inpSt={inpSt} btnGrad={btnGrad} setSelDay={setSelDay}/>
+          <TrainingTab weeks={weeks} currentWeek={currentWeek} currentDay={currentDay} selWeek={selWeek} selDay={selDay} selWeekLabel={selWeekLabel} updateDay={updateDay} showPraise={showPraise} C={C} cardSt={cardSt} inpSt={inpSt} btnGrad={btnGrad} setSelDay={setSelDay}/>
         )}
 
         {/* ══ 記録 ══ */}
@@ -652,7 +686,7 @@ export default function DietTracker() {
             <div style={cardSt()}>
               <div style={{fontSize:13,fontWeight:700,color:C.blue,marginBottom:12}}>📋 日々の記録</div>
               {[...currentWeek?.days].reverse().map((d,i)=>{
-                const realIdx=currentWeek.days.findIndex(dd=>dd.date===d.date&&dd.fullKey===d.fullKey);
+                const realIdx=d.fullKey||d.date; // fullKeyで特定（index依存排除）
                 return(
                   <div key={d.fullKey||d.date} style={{padding:"12px 0",borderBottom:`1px solid ${C.border}`}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
@@ -665,16 +699,16 @@ export default function DietTracker() {
                         {d.night!=null&&<span style={{color:C.purple}}>🌙{d.night}kg</span>}
                       </div>
                     </div>
-                    <div style={{display:"flex",gap:6,marginBottom:8,flexWrap:"wrap"}}>
-                      {["😊","😆","😍","😭","😡","🤤"].map(emoji=>(
-                        <button key={emoji} onClick={()=>updateDay(selWeek,realIdx,{mood:d.mood===emoji?"":emoji})}
-                          style={{fontSize:20,background:d.mood===emoji?"rgba(255,107,53,0.25)":"rgba(255,255,255,0.06)",border:d.mood===emoji?`1px solid ${C.orange}`:`1px solid ${C.border}`,borderRadius:10,padding:"4px 8px",cursor:"pointer"}}>
+                    <div style={{display:"flex",gap:4,marginBottom:8,flexWrap:"nowrap",overflowX:"auto"}}>
+                      {["😊","😆","😍","😭","😡","🤤","🌙","🌈"].map(emoji=>(
+                        <button key={emoji} onClick={()=>updateDay(selWeekLabel,realIdx,{mood:d.mood===emoji?"":emoji})}
+                          style={{fontSize:18,flexShrink:0,background:d.mood===emoji?"rgba(255,107,53,0.25)":"rgba(255,255,255,0.06)",border:d.mood===emoji?`1px solid ${C.orange}`:`1px solid ${C.border}`,borderRadius:10,padding:"4px 6px",cursor:"pointer"}}>
                           {emoji}
                         </button>
                       ))}
                     </div>
                     <input type="text" placeholder="備考を入力..." value={d.note||""}
-                      onChange={e=>updateDay(selWeek,realIdx,{note:e.target.value})}
+                      onChange={e=>updateDay(selWeekLabel,realIdx,{note:e.target.value})}
                       style={{...inpSt(),fontSize:12}}/>
                   </div>
                 );
@@ -683,7 +717,7 @@ export default function DietTracker() {
             <div style={cardSt({border:`1px solid ${C.purple}44`})}>
               <div style={{fontSize:13,fontWeight:700,color:C.purple,marginBottom:12}}>📝 今週の振り返り</div>
               <textarea value={currentWeek?.reflection||""} placeholder="今週を振り返って..."
-                onChange={e=>updateWeek(selWeek,{reflection:e.target.value})}
+                onChange={e=>updateWeek(selWeekLabel,{reflection:e.target.value})}
                 style={{...inpSt(`${C.purple}55`),height:130,resize:"none"}}/>
             </div>
           </div>
@@ -935,7 +969,7 @@ const calcRM = (w,r) => {
 };
 
 // ─── トレーニングタブ ────────────────────────────
-function TrainingTab({ weeks, currentWeek, currentDay, selWeek, selDay, updateDay, showPraise, C, cardSt, inpSt, btnGrad, setSelDay }) {
+function TrainingTab({ weeks, currentWeek, currentDay, selWeek, selDay, selWeekLabel, updateDay, showPraise, C, cardSt, inpSt, btnGrad, setSelDay }) {
   const PARTS=["Push","Pull","Leg","胸","背中","肩","腕・二頭","腕・三頭","脚","腹","臀部"];
   const MAX_SETS=5;
   const [exName, setExName] = useState("");
@@ -964,14 +998,14 @@ function TrainingTab({ weeks, currentWeek, currentDay, selWeek, selDay, updateDa
     if(!exName||!filled.length) return;
     const sw=filled.map((s,i)=>({setNo:i+1,reps:s.reps,weight:s.weight,rm:calcRM(s.weight,s.reps)}));
     const best=Math.max(...sw.map(s=>s.rm||0));
-    updateDay(selWeek,selDay,{training:{...training,exercises:[...exercises,{id:Date.now(),name:exName,sets:sw,bestRM:best}],done:true}});
+    updateDay(selWeekLabel,currentDay?.fullKey||selDay,{training:{...training,exercises:[...exercises,{id:Date.now(),name:exName,sets:sw,bestRM:best}],done:true}});
     setExName(""); setSets(Array.from({length:MAX_SETS},()=>({reps:"",weight:""})));
     showPraise("training");
   }
-  function remEx(id){updateDay(selWeek,selDay,{training:{...training,exercises:exercises.filter(e=>e.id!==id)}});}
+  function remEx(id){updateDay(selWeekLabel,currentDay?.fullKey||selDay,{training:{...training,exercises:exercises.filter(e=>e.id!==id)}});}
   function togPart(p){
     const ps=(training.parts||"").split(",").filter(Boolean);
-    updateDay(selWeek,selDay,{training:{...training,parts:(ps.includes(p)?ps.filter(x=>x!==p):[...ps,p]).join(",")}});
+    updateDay(selWeekLabel,currentDay?.fullKey||selDay,{training:{...training,parts:(ps.includes(p)?ps.filter(x=>x!==p):[...ps,p]).join(",")}});
   }
   const best=exercises.length?exercises.reduce((b,e)=>e.bestRM>b.rm?{name:e.name,rm:e.bestRM}:b,{name:"",rm:0}):null;
 
@@ -985,7 +1019,7 @@ function TrainingTab({ weeks, currentWeek, currentDay, selWeek, selDay, updateDa
       <div style={cardSt()}>
         <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14}}>
           <div style={{fontSize:13,fontWeight:700,color:C.orange}}>💪 {currentDay?.date}</div>
-          <button onClick={()=>{const nd=!training.done;updateDay(selWeek,selDay,{training:{...training,done:nd}});if(nd)showPraise("training");}} style={{marginLeft:"auto",padding:"7px 18px",border:"none",borderRadius:999,cursor:"pointer",fontWeight:700,fontSize:12,background:training.done?`linear-gradient(135deg,${C.green},${C.teal})`:"rgba(255,255,255,0.07)",color:training.done?"#000":C.muted}}>{training.done?"✅ 筋トレあり":"筋トレなし"}</button>
+          <button onClick={()=>{const nd=!training.done;updateDay(selWeekLabel,currentDay?.fullKey||selDay,{training:{...training,done:nd}});if(nd)showPraise("training");}} style={{marginLeft:"auto",padding:"7px 18px",border:"none",borderRadius:999,cursor:"pointer",fontWeight:700,fontSize:12,background:training.done?`linear-gradient(135deg,${C.green},${C.teal})`:"rgba(255,255,255,0.07)",color:training.done?"#000":C.muted}}>{training.done?"✅ 筋トレあり":"筋トレなし"}</button>
         </div>
         <div style={{marginBottom:14}}>
           <div style={{fontSize:11,color:C.muted,marginBottom:8}}>部位（複数選択可）</div>
@@ -994,8 +1028,8 @@ function TrainingTab({ weeks, currentWeek, currentDay, selWeek, selDay, updateDa
           </div>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-          <div><div style={{fontSize:11,color:C.blue,marginBottom:5}}>🏃 有酸素 (分)</div><input type="number" placeholder="0" value={training.cardio||""} style={inpSt(`${C.blue}55`)} onChange={e=>updateDay(selWeek,selDay,{training:{...training,cardio:parseInt(e.target.value)||0}})}/></div>
-          <div><div style={{fontSize:11,color:C.red,marginBottom:5}}>🔥 消費kcal</div><input type="number" placeholder="0" value={training.cardioKcal||""} style={inpSt(`${C.red}55`)} onChange={e=>updateDay(selWeek,selDay,{training:{...training,cardioKcal:parseInt(e.target.value)||0}})}/></div>
+          <div><div style={{fontSize:11,color:C.blue,marginBottom:5}}>🏃 有酸素 (分)</div><input type="number" placeholder="0" value={training.cardio||""} style={inpSt(`${C.blue}55`)} onChange={e=>updateDay(selWeekLabel,currentDay?.fullKey||selDay,{training:{...training,cardio:parseInt(e.target.value)||0}})}/></div>
+          <div><div style={{fontSize:11,color:C.red,marginBottom:5}}>🔥 消費kcal</div><input type="number" placeholder="0" value={training.cardioKcal||""} style={inpSt(`${C.red}55`)} onChange={e=>updateDay(selWeekLabel,currentDay?.fullKey||selDay,{training:{...training,cardioKcal:parseInt(e.target.value)||0}})}/></div>
         </div>
       </div>
       <div style={cardSt({border:`1px solid ${C.orange}44`})}>
@@ -1068,15 +1102,21 @@ function CalendarTab({ weeks, setWeeks, updateDay, setTab, C, cardSt, inpSt, btn
 
   const MONTH_JP=["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"];
   const DOW=["月","火","水","木","金","土","日"];
-  const MOODS=["😊","😆","😍","😭","😡","🤤"];
+  const MOODS=["😊","😆","😍","😭","😡","🤤","🌙","🌈"];
   const PARTS=["Push","Pull","Leg","胸","背中","肩","腕・二頭","腕・三頭","脚","腹","臀部"];
 
-  // 全週の日付マップ（fullKey優先）
+  // 全週の日付マップ（fullKey優先・weekLabelとdayIndexで特定→index依存なし）
   const dayMap=useMemo(()=>{
     const map={};
     weeks.forEach(w=>w.days.forEach((d,di)=>{
       const key=d.fullKey||`${d.year||today.getFullYear()}-${d.date}`;
-      map[key]={...d,weekIdx:weeks.indexOf(w),dayIdx:di};
+      map[key]={
+        ...d,
+        weekLabel: w.weekLabel,  // weekLabelで週を特定（index依存をやめる）
+        dayIdx: di,
+        // 後方互換のためにweekIdxも残すが使用禁止
+        weekIdx: weeks.indexOf(w),
+      };
     }));
     return map;
   },[weeks]);
@@ -1108,7 +1148,8 @@ function CalendarTab({ weeks, setWeeks, updateDay, setTab, C, cardSt, inpSt, btn
 
   function calUpd(patch) {
     if(!selectedData) return;
-    updateDay(selectedData.weekIdx, selectedData.dayIdx, patch);
+    // weekLabel + fullKey で特定（index依存を排除）
+    updateDay(selectedData.weekLabel, selectedData.fullKey || selectedData.dayIdx, patch);
   }
   function addMeal() {
     if(!mealForm.time||!mealForm.name||!selectedData) return;
